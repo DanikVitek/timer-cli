@@ -1,7 +1,12 @@
 use core::fmt;
-use std::{process::ExitCode, time::Duration};
+use std::{io, process::ExitCode, time::Duration};
 
-use crossterm::{cursor, style, terminal};
+use crossterm::{
+    cursor,
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    style, terminal,
+};
+use futures_util::{FutureExt, TryStreamExt};
 use human_errors::{Error, system_with_internal, user, user_with_cause, user_with_internal};
 
 fn main() -> ExitCode {
@@ -16,7 +21,7 @@ fn main() -> ExitCode {
 
     let duration_str = args[1].as_str();
 
-    let mut duration = match parse_duration(duration_str) {
+    let duration = match parse_duration(duration_str) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("{e}");
@@ -41,73 +46,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let result: Result<(), Error> = rt.block_on(async move {
-        let tick_period = Duration::from_secs(1);
-        let mut interval = tokio::time::interval(tick_period);
-
-        let mut writer = std::io::stderr();
-        crossterm::execute!(
-            &mut writer,
-            terminal::EnterAlternateScreen,
-            cursor::Hide,
-            cursor::MoveTo(0, 0)
-        )
-        .map_err(|err| {
-            system_with_internal(
-                "Failed to enter alternate screen",
-                "Try notifying the developer",
-                err,
-            )
-        })?;
-
-        while duration > Duration::ZERO {
-            tokio::select! {
-                _ = interval.tick() => {
-                    crossterm::execute!(
-                        writer,
-                        terminal::BeginSynchronizedUpdate,
-                        terminal::Clear(terminal::ClearType::CurrentLine),
-                        cursor::MoveTo(0, 0),
-                        style::Print(format_args!("Remaining time: {}", DurationDisplay(duration))),
-                        terminal::EndSynchronizedUpdate,
-                    )
-                    .map_err(|err| {
-                        system_with_internal(
-                            "Failed to write to the terminal",
-                            "Try notifying the developer",
-                            err,
-                        )
-                    })?;
-                    duration -= tick_period;
-                }
-                _ = tokio::signal::ctrl_c() => return crossterm::execute!(
-                    writer,
-                    cursor::Show,
-                    terminal::LeaveAlternateScreen,
-                    style::Print(format_args!("Timer stopped by user at {}.\n", DurationDisplay(duration))),
-                ).map_err(|err| {
-                    system_with_internal(
-                        "Failed to clear the terminal",
-                        "Try notifying the developer",
-                        err,
-                    )
-                }),
-            }
-        }
-
-        crossterm::execute!(
-            writer,
-            cursor::Show,
-            terminal::LeaveAlternateScreen,
-            style::Print("Timer finished!\n"),
-        ).map_err(|err| {
-            system_with_internal(
-                "Failed to clear the terminal",
-                "Try notifying the developer",
-                err,
-            )
-        })
-    });
+    let result = rt.block_on(run_timer(duration));
 
     if let Err(e) = result {
         eprintln!("{e}");
@@ -115,6 +54,217 @@ fn main() -> ExitCode {
     }
 
     return ExitCode::SUCCESS;
+}
+
+async fn run_timer(mut duration: Duration) -> Result<(), Error> {
+    let initial_duration = duration;
+
+    let tick_period = Duration::from_secs(1);
+    let mut interval = tokio::time::interval(tick_period);
+
+    let mut writer = std::io::stderr();
+    crossterm::execute!(
+        &mut writer,
+        terminal::EnterAlternateScreen,
+        cursor::Hide,
+        cursor::MoveTo(0, 0)
+    )
+    .and_then(|_| crossterm::terminal::enable_raw_mode())
+    .map_err(|err| {
+        system_with_internal(
+            "Failed to enter alternate screen",
+            "Try notifying the developer",
+            err,
+        )
+    })?;
+
+    let mut event_stream = EventStream::new();
+    let mut paused = false;
+    let mut paused_print = true;
+
+    loop {
+        let event = event_stream.try_next().fuse();
+        let tick = interval.tick().fuse();
+
+        tokio::select! {
+            maybe_event = event => match process_event_branch(
+                maybe_event,
+                &mut writer,
+                &mut paused,
+                &mut paused_print,
+                initial_duration,
+                duration
+            ) {
+                ControlFlow::Return(res) => return res,
+                ControlFlow::Break => break,
+                ControlFlow::Continue => continue,
+            },
+            _ = tick => {
+                if paused {
+                    crossterm::execute!(
+                        writer,
+                        terminal::BeginSynchronizedUpdate,
+                    )
+                    .and_then(|_| print_paused(&mut writer, &mut paused_print))
+                    .map_err(|err| {
+                        system_with_internal(
+                            "Failed to write to the terminal",
+                            "Try notifying the developer",
+                            err,
+                        )
+                    })?;
+                    continue;
+                }
+                if duration.is_zero() {
+                    break;
+                }
+                crossterm::execute!(
+                    writer,
+                    terminal::BeginSynchronizedUpdate,
+                    terminal::Clear(terminal::ClearType::All),
+                    cursor::MoveTo(0, 0),
+                    style::Print(format_args!("Remaining time: {}", DurationDisplay(duration))),
+                    terminal::EndSynchronizedUpdate,
+                )
+                .map_err(|err| {
+                    system_with_internal(
+                        "Failed to write to the terminal",
+                        "Try notifying the developer",
+                        err,
+                    )
+                })?;
+                duration -= tick_period;
+            }
+        }
+    }
+
+    crossterm::execute!(
+        writer,
+        cursor::Show,
+        terminal::LeaveAlternateScreen,
+        style::Print("Timer finished!\n"),
+    )
+    .and_then(|_| crossterm::terminal::disable_raw_mode())
+    .map_err(|err| {
+        system_with_internal(
+            "Failed to clear the terminal",
+            "Try notifying the developer",
+            err,
+        )
+    })
+}
+
+enum ControlFlow {
+    Return(Result<(), Error>),
+    Break,
+    Continue,
+}
+
+#[inline]
+fn process_event_branch(
+    maybe_event: io::Result<Option<Event>>,
+    writer: &mut io::Stderr,
+    paused: &mut bool,
+    paused_print: &mut bool,
+    initial_duration: Duration,
+    duration: Duration,
+) -> ControlFlow {
+    match maybe_event {
+        Ok(None) => ControlFlow::Break,
+        Ok(Some(event)) => match event {
+            Event::Key(
+                KeyEvent {
+                    code: KeyCode::Char('q'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Char('c'),
+                    kind: KeyEventKind::Press,
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                },
+            ) => ControlFlow::Return(
+                crossterm::execute!(
+                    writer,
+                    cursor::Show,
+                    terminal::LeaveAlternateScreen,
+                    style::Print(format_args!(
+                        "Timer stopped by user at {}, after {}.\n",
+                        DurationDisplay(duration),
+                        DurationDisplay(initial_duration - duration)
+                    )),
+                )
+                .and_then(|_| crossterm::terminal::disable_raw_mode())
+                .map_err(|err| {
+                    system_with_internal(
+                        "Failed to clear the terminal",
+                        "Try notifying the developer",
+                        err,
+                    )
+                }),
+            ),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('p'),
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                *paused = !*paused;
+                let res = if *paused {
+                    print_paused(writer, paused_print)
+                } else {
+                    crossterm::execute!(
+                        writer,
+                        terminal::BeginSynchronizedUpdate,
+                        cursor::MoveTo(0, 1),
+                        terminal::Clear(terminal::ClearType::CurrentLine),
+                        cursor::MoveTo(0, 2),
+                        terminal::Clear(terminal::ClearType::CurrentLine),
+                        terminal::EndSynchronizedUpdate,
+                    )
+                }
+                .map_err(|err| {
+                    system_with_internal(
+                        "Failed to write to the terminal",
+                        "Try notifying the developer",
+                        err,
+                    )
+                });
+                if res.is_err() {
+                    return ControlFlow::Return(res);
+                }
+                ControlFlow::Continue
+            }
+            _ => ControlFlow::Continue,
+        },
+        Err(err) => ControlFlow::Return(Err(system_with_internal(
+            "Failed to read events",
+            "Try notifying the developer",
+            err,
+        ))),
+    }
+}
+
+fn print_paused(writer: &mut std::io::Stderr, print: &mut bool) -> io::Result<()> {
+    if *print {
+        crossterm::execute!(
+            writer,
+            cursor::MoveTo(0, 1),
+            style::Print("PAUSED"),
+            cursor::MoveTo(0, 2),
+            style::Print("Timer is paused. Press 'p' to resume or 'q' to quit."),
+        )
+        .inspect(|_| *print = false)
+    } else {
+        crossterm::execute!(
+            writer,
+            cursor::MoveTo(0, 1),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            cursor::MoveTo(0, 2),
+            style::Print("Timer is paused. Press 'p' to resume or 'q' to quit."),
+        )
+        .inspect(|_| *print = true)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -132,12 +282,12 @@ impl fmt::Display for DurationDisplay {
             write!(f, "{}d ", days)?;
         }
         if hours > 0 || days > 0 {
-            write!(f, "{:02}h ", hours)?;
+            write!(f, "{hours}h ")?;
         }
         if minutes > 0 || hours > 0 || days > 0 {
-            write!(f, "{:02}m ", minutes)?;
+            write!(f, "{minutes}m ")?;
         }
-        write!(f, "{:02}s", seconds)
+        write!(f, "{seconds}s")
     }
 }
 
