@@ -1,0 +1,146 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: Build for Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+      
+      - name: Upload Linux build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: timer-linux-x86_64
+          path: target/x86_64-unknown-linux-gnu/release/timer
+
+  build-macos:
+    name: Build for macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      
+      - name: Build (Intel)
+        run: cargo build --release --target x86_64-apple-darwin
+      
+      - name: Build (Apple Silicon)
+        run: cargo build --release --target aarch64-apple-darwin
+      
+      - name: Upload macOS Intel build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: timer-macos-x86_64
+          path: target/x86_64-apple-darwin/release/timer
+      
+      - name: Upload macOS Apple Silicon build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: timer-macos-aarch64
+          path: target/aarch64-apple-darwin/release/timer
+
+  build-windows:
+    name: Build for Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: timer-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/timer.exe
+
+  publish:
+    name: Publish Release
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: timer-linux-x86_64
+          path: artifacts/linux/
+      
+      - name: Download macOS Intel build
+        uses: actions/download-artifact@v4
+        with:
+          name: timer-macos-x86_64
+          path: artifacts/macos/x86_64/
+      
+      - name: Download macOS Apple Silicon build
+        uses: actions/download-artifact@v4
+        with:
+          name: timer-macos-aarch64
+          path: artifacts/macos/aarch64/
+      
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: timer-windows-x86_64
+          path: artifacts/windows/
+      
+      - name: Create archives
+        run: |
+          chmod +x artifacts/linux/timer
+          chmod +x artifacts/macos/x86_64/timer
+          chmod +x artifacts/macos/aarch64/timer
+          
+          cd artifacts/linux
+          tar -czf ../../timer-linux-x86_64.tar.gz timer
+          cd ../..
+          
+          cd artifacts/macos/x86_64
+          tar -czf ../../../timer-macos-x86_64.tar.gz timer
+          cd ../../..
+          
+          cd artifacts/macos/aarch64
+          tar -czf ../../../timer-macos-aarch64.tar.gz timer
+          cd ../../..
+          
+          cd artifacts/windows
+          zip -r ../../timer-windows-x86_64.zip timer.exe
+          cd ../..
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            timer-linux-x86_64.tar.gz
+            timer-macos-x86_64.tar.gz
+            timer-macos-aarch64.tar.gz
+            timer-windows-x86_64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
