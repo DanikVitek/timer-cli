@@ -53,7 +53,7 @@ jobs:
           path: target/x86_64-apple-darwin/release/timer
       
       - name: Upload macOS Apple Silicon build artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: timer-macos-aarch64
           path: target/aarch64-apple-darwin/release/timer
