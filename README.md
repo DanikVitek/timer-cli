@@ -7,6 +7,7 @@ A simple command line timer application written in Rust.
 ```bash
 timer --help
 ```
+
 ```
 A simple CLI timer application using crossterm and tokio
 
@@ -21,6 +22,11 @@ Options:
 ```
 
 ## Installation
+
+### From releases page
+
+You can download the [latest release](https://github.com/DanikVitek/timer-cli/releases/latest) from the [releases page](https://github.com/DanikVitek/timer-cli/releases)
+and extract the binary for your platform. After downloading, make sure to include the binary in your system's PATH.
 
 ### Using Cargo
 
