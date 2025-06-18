@@ -39,7 +39,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    return ExitCode::SUCCESS;
+    ExitCode::SUCCESS
 }
 
 #[derive(Parser)]
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
 struct Args {
     #[arg(
         name = "[[[d:]h:]m:]s duration",
-        help = "Duration in the format \"[[[d:]h:]m:]s\" (e.g., \"1:2:3:4\" for 1 day, 2 hours, 3 minutes, and 4 seconds)",
+        help = "Duration in the format \"[[[d:]h:]m:]s\" (e.g., \"1:2:3:4\" for 1 day, 2 hours, 3 minutes, and 4 seconds)"
     )]
     duration: ColonSeparatedDuration,
 }
@@ -108,9 +108,11 @@ async fn run_timer(mut duration: Duration) -> Result<(), Error> {
             },
             _ = tick => {
                 if paused {
-                    crossterm::execute!(
+                    crossterm::queue!(
                         writer,
                         terminal::BeginSynchronizedUpdate,
+                        cursor::MoveTo(0, 2),
+                        style::Print("Timer is paused. Press 'p' to resume or 'q' to quit."),
                     )
                     .and_then(|_| print_paused(&mut writer, &mut paused_print))
                     .map_err(|err| {
@@ -145,20 +147,20 @@ async fn run_timer(mut duration: Duration) -> Result<(), Error> {
         }
     }
 
-    crossterm::execute!(
-        writer,
-        cursor::Show,
-        terminal::LeaveAlternateScreen,
-        style::Print("Timer finished!\n"),
-    )
-    .and_then(|_| crossterm::terminal::disable_raw_mode())
-    .map_err(|err| {
-        system_with_internal(
-            "Failed to clear the terminal",
-            "Try notifying the developer",
-            err,
-        )
-    })
+    crossterm::execute!(writer, cursor::Show, terminal::LeaveAlternateScreen)
+        .and_then(|_| {
+            use std::io::Write;
+
+            crossterm::terminal::disable_raw_mode()?;
+            writeln!(writer, "Timer finished!")
+        })
+        .map_err(|err| {
+            system_with_internal(
+                "Failed to clear the terminal",
+                "Try notifying the developer",
+                err,
+            )
+        })
 }
 
 enum ControlFlow {
@@ -192,24 +194,25 @@ fn process_event_branch(
                     ..
                 },
             ) => ControlFlow::Return(
-                crossterm::execute!(
-                    writer,
-                    cursor::Show,
-                    terminal::LeaveAlternateScreen,
-                    style::Print(format_args!(
-                        "Timer stopped by user at {}, after {}.\n",
-                        DurationDisplay(duration),
-                        DurationDisplay(initial_duration - duration)
-                    )),
-                )
-                .and_then(|_| crossterm::terminal::disable_raw_mode())
-                .map_err(|err| {
-                    system_with_internal(
-                        "Failed to clear the terminal",
-                        "Try notifying the developer",
-                        err,
-                    )
-                }),
+                crossterm::execute!(writer, cursor::Show, terminal::LeaveAlternateScreen)
+                    .and_then(|_| {
+                        use std::io::Write;
+
+                        crossterm::terminal::disable_raw_mode()?;
+                        writeln!(
+                            writer,
+                            "Timer stopped by user at {}, after {}.",
+                            DurationDisplay(duration),
+                            DurationDisplay(initial_duration - duration),
+                        )
+                    })
+                    .map_err(|err| {
+                        system_with_internal(
+                            "Failed to clear the terminal",
+                            "Try notifying the developer",
+                            err,
+                        )
+                    }),
             ),
             Event::Key(KeyEvent {
                 code: KeyCode::Char('p'),
@@ -218,14 +221,20 @@ fn process_event_branch(
             }) => {
                 *paused = !*paused;
                 let res = if *paused {
-                    print_paused(writer, paused_print)
+                    crossterm::queue!(
+                        writer,
+                        terminal::BeginSynchronizedUpdate,
+                        cursor::MoveTo(0, 2),
+                        style::Print("Timer is paused. Press 'p' to resume or 'q' to quit."),
+                    )
+                    .and_then(|_| print_paused(writer, paused_print))
                 } else {
                     crossterm::execute!(
                         writer,
                         terminal::BeginSynchronizedUpdate,
                         cursor::MoveTo(0, 1),
                         terminal::Clear(terminal::ClearType::CurrentLine),
-                        cursor::MoveTo(0, 2),
+                        cursor::MoveToNextLine(1),
                         terminal::Clear(terminal::ClearType::CurrentLine),
                         terminal::EndSynchronizedUpdate,
                     )
@@ -258,8 +267,7 @@ fn print_paused(writer: &mut std::io::Stderr, print: &mut bool) -> io::Result<()
             writer,
             cursor::MoveTo(0, 1),
             style::Print("PAUSED"),
-            cursor::MoveTo(0, 2),
-            style::Print("Timer is paused. Press 'p' to resume or 'q' to quit."),
+            terminal::EndSynchronizedUpdate,
         )
         .inspect(|_| *print = false)
     } else {
@@ -267,8 +275,7 @@ fn print_paused(writer: &mut std::io::Stderr, print: &mut bool) -> io::Result<()
             writer,
             cursor::MoveTo(0, 1),
             terminal::Clear(terminal::ClearType::CurrentLine),
-            cursor::MoveTo(0, 2),
-            style::Print("Timer is paused. Press 'p' to resume or 'q' to quit."),
+            terminal::EndSynchronizedUpdate,
         )
         .inspect(|_| *print = true)
     }

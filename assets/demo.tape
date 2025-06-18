@@ -7,3 +7,4 @@ Sleep 4s
 Type "p"
 Sleep 2.5s
 Type "q"
+Sleep 2s
