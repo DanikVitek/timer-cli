@@ -20,6 +20,9 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
       
+      - name: Run Tests
+        run: cargo test --target x86_64-unknown-linux-gnu
+
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-gnu
       
@@ -40,6 +43,11 @@ jobs:
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
       
+      - name: Run Tests
+        run:
+          cargo test --target x86_64-apple-darwin
+          cargo test --target aarch64-apple-darwin
+
       - name: Build (Intel)
         run: cargo build --release --target x86_64-apple-darwin
       
@@ -68,7 +76,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-      
+
+      - name: Run Tests
+        run: cargo test --target x86_64-pc-windows-msvc
+
       - name: Build
         run: cargo build --release --target x86_64-pc-windows-msvc
       

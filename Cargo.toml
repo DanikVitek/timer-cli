@@ -6,6 +6,7 @@ authors = ["Danylo Vitkovskyi <x3665107@gmail.com>"]
 description = "A simple CLI timer application using crossterm and tokio"
 license = "MIT"
 repository = "https://github.com/DanikVitek/timer-cli"
+readme = "README.md"
 
 [profile.release]
 opt-level = 3

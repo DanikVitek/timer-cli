@@ -2,7 +2,7 @@
 
 A simple command line timer application written in Rust.
 
-![Demo GIF via VHS](assets/demo.gif)
+![Demo GIF made with VHS](https://vhs.charm.sh/vhs-2qSBgDMxlVkv1TAEZH9zMU.gif)
 
 ## Help
 

@@ -1,5 +1,7 @@
+Set Width 1200
+Set Theme "Aardvark Blue"
 Type "timer 75:00"
-Sleep 500ms
+Sleep 2s
 Enter
 Sleep 6s
 Type "p"
