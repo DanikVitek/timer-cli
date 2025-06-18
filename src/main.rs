@@ -1,6 +1,7 @@
-use core::fmt;
-use std::{io, process::ExitCode, time::Duration};
+use core::{fmt, str::FromStr, time::Duration};
+use std::{io, process::ExitCode};
 
+use clap::Parser;
 use crossterm::{
     cursor,
     event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -10,24 +11,9 @@ use futures_util::{FutureExt, TryStreamExt};
 use human_errors::{Error, system_with_internal, user, user_with_cause, user_with_internal};
 
 fn main() -> ExitCode {
-    let args: Box<[String]> = std::env::args().collect();
-
-    if args.len() != 2 {
-        let usage = format!("Usage: {} <duration in format d:h:m:s>", args[0]);
-        let err = user("Invalid usage of the tool", &usage);
-        eprintln!("{err}");
-        return ExitCode::FAILURE;
-    }
-
-    let duration_str = args[1].as_str();
-
-    let duration = match parse_duration(duration_str) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let Args {
+        duration: ColonSeparatedDuration(duration),
+    } = Args::parse();
 
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -54,6 +40,27 @@ fn main() -> ExitCode {
     }
 
     return ExitCode::SUCCESS;
+}
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(
+        name = "[[[d:]h:]m:]s duration",
+        help = "Duration in the format \"[[[d:]h:]m:]s\" (e.g., \"1:2:3:4\" for 1 day, 2 hours, 3 minutes, and 4 seconds)",
+    )]
+    duration: ColonSeparatedDuration,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ColonSeparatedDuration(Duration);
+
+impl FromStr for ColonSeparatedDuration {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_duration(s).map(Self)
+    }
 }
 
 async fn run_timer(mut duration: Duration) -> Result<(), Error> {
@@ -296,7 +303,7 @@ fn parse_duration(duration_str: &str) -> Result<Duration, Error> {
     if parts.is_empty() {
         return Err(user_with_cause(
             "Failed to parse the duration",
-            "Provide the duration in the following format: \"d:h:m:s\"",
+            "Provide the duration in the following format: \"[[[d:]h:]m:]s\"",
             user(
                 "Missing parts",
                 "Make sure to provide at least the seconds part of the duration",
@@ -306,7 +313,7 @@ fn parse_duration(duration_str: &str) -> Result<Duration, Error> {
     if parts.len() > 4 {
         return Err(user_with_cause(
             "Failed to parse the duration",
-            "Provide the duration in the following format: \"d:h:m:s.ms\"",
+            "Provide the duration in the following format: \"[[[d:]h:]m:]s\"",
             user(
                 "Too many parts",
                 "Make sure to provide at most 4 parts for days, hours, minutes, and seconds",
@@ -324,7 +331,7 @@ fn parse_duration(duration_str: &str) -> Result<Duration, Error> {
             _ => {
                 return Err(user_with_cause(
                     "Failed to parse the duration",
-                    "Provide the duration in the following format: \"d:h:m:s.ms\"",
+                    "Provide the duration in the following format: \"[[[d:]h:]m:]s\"",
                     user(
                         "Too many parts in seconds.milliseconds",
                         "Make sure to provide at most one dot in the seconds part",
@@ -442,4 +449,15 @@ fn parse_duration(duration_str: &str) -> Result<Duration, Error> {
     }
 
     Ok(duration)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_cli() {
+        use clap::CommandFactory;
+        Args::command().debug_assert();
+    }
 }
