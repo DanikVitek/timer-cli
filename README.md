@@ -2,6 +2,8 @@
 
 A simple command line timer application written in Rust.
 
+![Demo GIF via VHS](demo.gif)
+
 ## Help
 
 ```bash
